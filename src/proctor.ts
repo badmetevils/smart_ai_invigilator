@@ -19,7 +19,7 @@ export default class Proctor {
     fps: 3,
     imageType: "image/jpeg",
     strokeColor: "#2bedff",
-    gazeSensitivity: 0.4,
+    gazeSensitivity: 0.25,
   };
   private timeStamp: number;
   private canvasElement: HTMLCanvasElement;
@@ -60,7 +60,7 @@ export default class Proctor {
       quantBytes: 2,
       inputResolution: { width: this.VideoElement.clientHeight, height: 480 },
       outputStride: 8,
-      multiplier: 0.75,
+      multiplier: 0.5,
     });
     this.VideoElement.play();
     this.executeOnEveryFrame(this.proctorFrame);
@@ -149,7 +149,7 @@ export default class Proctor {
     });
   };
 
-  private detectGaze = (keypoints: PoseNet.Keypoint[], minConfidence = 0.8) => {
+  private detectGaze = (keypoints: PoseNet.Keypoint[], minConfidence = 0.4) => {
     const screenShot = this.captureActivity("Person", [0, 0, this.videoSize.width - 40, this.videoSize.height - 80]);
     const [nose, leftEye, rightEye, leftEar, rightEar, ...rest] = keypoints;
 
