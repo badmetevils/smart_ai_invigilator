@@ -5,7 +5,8 @@
   "main": "index.js",
   "scripts": {
     "build": "webpack --env production --mode production",
-    "dev": "webpack-dev-server  --mode none"
+    "dev": "webpack-dev-server  --mode none",
+    "convert:js":"tsc ./src/*.ts"
   },
   "keywords": [],
   "author": "",

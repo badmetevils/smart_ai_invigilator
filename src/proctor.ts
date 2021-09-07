@@ -1,41 +1,68 @@
 import * as cocoSsd from "@tensorflow-models/coco-ssd";
 import * as PoseNet from "@tensorflow-models/posenet";
 import "@tensorflow/tfjs";
-
-interface IAction {
-  detectionType: "MULTIPLE_FACE" | "MOBILE" | "LAPTOP" | "NO_PERSON" | "BOOK" | "GAZE";
-  timestamp: number;
-  screenShot: string;
-  data: {};
-}
+import { IActionArgs, IOptions, IQueueActions } from "./type";
 
 export default class Proctor {
   private videoSize: { width: number; height: number };
-  private actionsCallBack: (args: IAction) => void;
+  private actionsCallBack: (args: IActionArgs | IQueueActions) => void;
   private objectDetectionModel: cocoSsd.ObjectDetection;
   private posNetModal: PoseNet.PoseNet;
   private VideoElement: HTMLVideoElement;
-  private options = {
+  private queue: IActionArgs[] = [];
+  private interval: number;
+
+  private options: IOptions = {
     fps: 3,
-    imageType: "image/jpeg",
+    imageType: "jpeg",
     strokeColor: "#2bedff",
-    gazeSensitivity: 0.25,
+    gazeSensitivityPercent: 20,
+    queueEvents: false,
+    queueCoolDownPeriod: 5,
   };
+
   private timeStamp: number;
   private canvasElement: HTMLCanvasElement;
   private canvasContext: CanvasRenderingContext2D;
   private raf: number;
 
-  constructor(videoElement: HTMLVideoElement, callBack: (args: any) => void, options?: { [x: string]: any }) {
+  constructor(
+    videoElement: HTMLVideoElement,
+    callBack: (args: IActionArgs | IQueueActions) => void,
+    options?: IOptions
+  ) {
     this.actionsCallBack = callBack;
     this.VideoElement = videoElement;
     this.timeStamp = Date.now();
+    this.options = {
+      ...this.options,
+      ...options,
+    };
+    this.validate();
     this.init();
   }
 
+  private validate = () => {
+    if (this.options.fps < 1 || this.options.fps > 5) {
+      throw new Error(`[FPS-ERROR]: Expecting the fps to be between 0 to 5 only`);
+    }
+    if (this.options.gazeSensitivityPercent < 5 || this.options.gazeSensitivityPercent > 60) {
+      throw new Error(`[GAZE-SENSITIVITY-ERROR]: Expecting the gazeSensitivity to be between  5% to 80% only`);
+    }
+    if (!(this.options.imageType == "jpeg" || this.options.imageType == "png")) {
+      throw new Error(`[IMAGE-TYPE-ERROR]: Expecting image type to be jpeg or png`);
+    }
+    if (this.options.queueEvents && !this.options.queueCoolDownPeriod) {
+      throw new Error(`[QUEUE-TYPE-ERROR]: Expecting a cool down periods to send data in bulk`);
+    }
+  };
+
   private init = async () => {
     this.createCanvas();
-    this.prepareModels();
+    await this.prepareModels();
+    if (this.options.queueEvents) {
+      this.sendBulkEvents();
+    }
   };
 
   private createCanvas = () => {
@@ -72,8 +99,8 @@ export default class Proctor {
     const gaze = this.posNetModal.estimateSinglePose(this.VideoElement);
     const [predictions, { keypoints }] = await Promise.all([detection, gaze]);
 
+    this.detectGaze(keypoints, this.options.gazeSensitivityPercent / 100);
     this.detectObjects(predictions);
-    this.detectGaze(keypoints, this.options.gazeSensitivity);
   };
 
   private detectObjects = (predictions: cocoSsd.DetectedObject[]) => {
@@ -86,7 +113,7 @@ export default class Proctor {
             faceCount += 1;
 
             if (faceCount > 1) {
-              this.actionsCallBack({
+              this.sendCallBack({
                 detectionType: "MULTIPLE_FACE",
                 timestamp: Date.now(),
                 data: {
@@ -99,7 +126,7 @@ export default class Proctor {
           break;
         case "cell phone":
           {
-            this.actionsCallBack({
+            this.sendCallBack({
               detectionType: "MOBILE",
               timestamp: Date.now(),
               data: {
@@ -111,7 +138,7 @@ export default class Proctor {
           break;
         case "book":
           {
-            this.actionsCallBack({
+            this.sendCallBack({
               detectionType: "BOOK",
               timestamp: Date.now(),
               data: {
@@ -123,7 +150,7 @@ export default class Proctor {
           break;
         case "laptop":
           {
-            this.actionsCallBack({
+            this.sendCallBack({
               detectionType: "LAPTOP",
               timestamp: Date.now(),
               data: {
@@ -135,15 +162,6 @@ export default class Proctor {
           break;
 
         default:
-          // {
-          //   const screenShot = this.captureActivity(detectedObject, objectBox);
-          //   this.actionsCallBack({
-          //     detectionType: "NO_PERSON",
-          //     timestamp: Date.now(),
-          //     data: {},
-          //     screenShot,
-          //   });
-          // }
           break;
       }
     });
@@ -152,13 +170,12 @@ export default class Proctor {
   private detectGaze = (keypoints: PoseNet.Keypoint[], minConfidence = 0.4) => {
     const screenShot = this.captureActivity("Person", [0, 0, this.videoSize.width - 40, this.videoSize.height - 80]);
     const [nose, leftEye, rightEye, leftEar, rightEar, ...rest] = keypoints;
-
-    const noPersonConfidence = 0.5;
+    const noPersonConfidence = 0.3;
     if (
       (leftEye.score < noPersonConfidence && rightEye.score < noPersonConfidence) ||
       nose.score < noPersonConfidence
     ) {
-      this.actionsCallBack({
+      this.sendCallBack({
         detectionType: "NO_PERSON",
         screenShot,
         timestamp: Date.now(),
@@ -169,7 +186,7 @@ export default class Proctor {
       return;
     }
     if (leftEar.score < minConfidence) {
-      this.actionsCallBack({
+      this.sendCallBack({
         detectionType: "GAZE",
         screenShot,
         timestamp: Date.now(),
@@ -180,7 +197,7 @@ export default class Proctor {
       return;
     }
     if (rightEar.score < minConfidence) {
-      this.actionsCallBack({
+      this.sendCallBack({
         detectionType: "GAZE",
         screenShot,
         timestamp: Date.now(),
@@ -210,7 +227,7 @@ export default class Proctor {
     // Draw the label background.
     ctx.fillStyle = this.options.strokeColor;
     ctx.fillText(name.toUpperCase(), x, y - 8);
-    const image = canvas.toDataURL(this.options.imageType);
+    const image = canvas.toDataURL(`image/${this.options.imageType}`);
     ctx.clearRect(0, 0, this.videoSize.width, this.videoSize.height);
     return image;
   };
@@ -228,7 +245,29 @@ export default class Proctor {
       this.executeOnEveryFrame(callBack);
     });
   };
+
   public stop = () => {
+    clearInterval(this.interval);
     cancelAnimationFrame(this.raf);
+  };
+
+  private sendCallBack = (args: IActionArgs) => {
+    if (this.options.queueEvents) {
+      this.queue.push(args);
+    } else {
+      this.actionsCallBack(args);
+    }
+  };
+
+  private sendBulkEvents = () => {
+    this.interval = window.setInterval(() => {
+      if (this.queue.length) {
+        this.actionsCallBack({
+          type: "QUEUE_EVENTS",
+          events: JSON.parse(JSON.stringify(this.queue)),
+        });
+        this.queue.length = 0;
+      }
+    }, this.options.queueCoolDownPeriod * 1000);
   };
 }

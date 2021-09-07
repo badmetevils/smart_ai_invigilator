@@ -34,7 +34,13 @@ import Proctor from "./proctor";
             .then((stream) => {
               video.srcObject = stream;
               video.onloadedmetadata = () => {
-                const proctor = new Proctor(video, console.log);
+                const proctor = new Proctor(video, console.log, {
+                  fps: 2,
+                  queueEvents: true,
+                  gazeSensitivityPercent: 15,
+                  queueCoolDownPeriod:5,
+                  strokeColor: "red",
+                });
               };
             })
             .catch(console.log);
